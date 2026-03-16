@@ -45,14 +45,19 @@ ensure_repo() {
 cmd_tree() {
     ensure_repo
     
-    local path="${1:-.}"
+    local path="."
     local depth="3"
+    local limit="10"
     
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
             --depth)
                 depth="$2"
+                shift 2
+                ;;
+            --limit)
+                limit="$2"
                 shift 2
                 ;;
             -*)
@@ -84,7 +89,7 @@ cmd_tree() {
     
     # Build tree
     local indent="    "
-    build_tree "$full_path" "$indent" "$depth" 1
+    build_tree "$full_path" "$indent" "$depth" "$limit" 1
 }
 
 # Recursive tree builder
@@ -92,7 +97,8 @@ build_tree() {
     local current_path="$1"
     local current_indent="$2"
     local max_depth="$3"
-    local current_depth="$4"
+    local limit="$4"
+    local current_depth="$5"
     
     if [ "$current_depth" -ge "$max_depth" ]; then
         return
@@ -105,11 +111,24 @@ build_tree() {
     done < <(find "$current_path" -maxdepth 1 -mindepth 1 -type d ! -name ".git" -print0 2>/dev/null | sort -z)
     
     local dir_count=${#dirs[@]}
+    
+    # Apply limit to directories
+    local dirs_to_show=()
+    local remaining_dirs=0
+    if [ "$dir_count" -gt "$limit" ]; then
+        for ((i=0; i<limit; i++)); do
+            dirs_to_show+=("${dirs[$i]}")
+        done
+        remaining_dirs=$((dir_count - limit))
+    else
+        dirs_to_show=("${dirs[@]}")
+    fi
+    
     local i=0
-    for dir in "${dirs[@]}"; do
+    for dir in "${dirs_to_show[@]}"; do
         i=$((i + 1))
         local basename=$(basename "$dir")
-        local is_last_dir=$([ $i -eq $dir_count ] && echo "1" || echo "0")
+        local is_last_dir=$([[ $i -eq ${#dirs_to_show[@]} && $remaining_dirs -eq 0 ]] && echo "1" || echo "0")
         local connector=$([ $is_last_dir -eq 1 ] && echo "└──" || echo "├──")
         
         # Get README description if exists
@@ -126,21 +145,38 @@ build_tree() {
         
         # Recurse with increased indent
         local next_indent="${current_indent}$([ $is_last_dir -eq 1 ] && echo "    " || echo "│   ")"
-        build_tree "$dir" "$next_indent" "$max_depth" $((current_depth + 1))
+        build_tree "$dir" "$next_indent" "$max_depth" "$limit" $((current_depth + 1))
     done
     
-    # Then list files (only .md)
+    # Show remaining dirs count
+    if [ "$remaining_dirs" -gt 0 ]; then
+        echo -e "${current_indent}└── ${YELLOW}... ${remaining_dirs} more directories${NC}"
+    fi
+    
     local files=()
     while IFS= read -r -d '' file; do
         files+=("$file")
     done < <(find "$current_path" -maxdepth 1 -mindepth 1 -type f -name "*.md" ! -name "README.md" -print0 2>/dev/null | sort -z)
     
     local file_count=${#files[@]}
+    
+    # Apply limit to files
+    local files_to_show=()
+    local remaining_files=0
+    if [ "$file_count" -gt "$limit" ]; then
+        for ((i=0; i<limit; i++)); do
+            files_to_show+=("${files[$i]}")
+        done
+        remaining_files=$((file_count - limit))
+    else
+        files_to_show=("${files[@]}")
+    fi
+    
     local j=0
-    for file in "${files[@]}"; do
+    for file in "${files_to_show[@]}"; do
         j=$((j + 1))
         local basename=$(basename "$file")
-        local is_last=$([ $j -eq $file_count ] && echo "1" || echo "0")
+        local is_last=$([[ $j -eq ${#files_to_show[@]} && $remaining_files -eq 0 ]] && echo "1" || echo "0")
         local connector=$([ $is_last -eq 1 ] && echo "└──" || echo "├──")
         
         # Get title from frontmatter if exists
@@ -155,6 +191,11 @@ build_tree() {
             echo -e "${current_indent}${connector} ${BLUE}[FILE] $basename${NC}"
         fi
     done
+    
+    if [ "$remaining_files" -gt 0 ]; then
+        local connector=$([ $remaining_dirs -gt 0 ] && echo "│   " || echo "    ")
+        echo -e "${current_indent}${connector}└── ${YELLOW}... ${remaining_files} more files${NC}"
+    fi
 }
 
 # Read file content
@@ -378,13 +419,17 @@ cmd_help() {
     echo "Usage: $0 {tree|read|search|tags|status|commit|sync}"
     echo ""
     echo "Commands:"
-    echo "  tree [path] [--depth N]    Show folder structure"
+    echo "  tree [path] [--depth N] [--limit N]  Show folder structure"
     echo "  read <path>                Read file content"
     echo "  search <query> [--path]    Search files and content"
     echo "  tags                       List all tags"
     echo "  status                     Show current status"
     echo "  commit [message]           Commit and push changes"
     echo "  sync                       Pull and push"
+    echo ""
+    echo "Options:"
+    echo "  --depth N    Max depth to display (default: 3)"
+    echo "  --limit N    Max items per level (default: 10)"
     echo ""
     echo "Environment:"
     echo "  GIT_KB_PATH    Local KB directory (default: ~/knowledge-base)"
